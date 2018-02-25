@@ -8,6 +8,7 @@ import type {FieldName, Id} from './types'
 import {INCLUDE_FIELDS} from './constants'
 import hasEqualFields from './utils/hasEqualFields'
 import isUniqueBy from './utils/isUniqueBy'
+import applyMutations from './utils/applyMutation'
 
 let _globalListener
 const getGlobalEvents = () => {
@@ -57,18 +58,46 @@ const fetchDocumentPathsFast = debounceCollect(fetchAllDocumentPaths, 100)
 const fetchDocumentPathsSlow = debounceCollect(fetchAllDocumentPaths, 1000)
 
 function listenFields(id: Id, fields: FieldName[]) {
-  return listen(id).switchMap(event => {
-    if (event.type === 'welcome') {
-      return fetchDocumentPathsFast(id, fields).mergeMap(result => {
-        return result === undefined
-          ? // hack: if we get undefined as result here it is most likely because the document has
-            // just been created and is not yet indexed. We therefore need to wait a bit and then re-fetch.
-            fetchDocumentPathsSlow(id, fields)
-          : Observable.of(result)
-      })
-    }
-    return fetchDocumentPathsSlow(id, fields)
-  })
+  return listen(id)
+    .concatMap(event => {
+      if (event.type === 'welcome') {
+        return fetchDocumentPathsFast(id, fields)
+          .mergeMap(result => {
+            return result === undefined
+              ? // hack: if we get undefined as result here it is most likely because the document has
+                // just been created and is not yet indexed. We therefore need to wait a bit and then re-fetch.
+                fetchDocumentPathsSlow(id, fields)
+              : Observable.of(result)
+          })
+          .map(snapshot => ({
+            type: 'snapshot',
+            snapshot: snapshot
+          }))
+      }
+      return Observable.of(event)
+    })
+    .scan((prevSnapshot, event) => {
+      if (event.type === 'snapshot') {
+        return event.snapshot
+      }
+      if (event.type === 'mutation') {
+        if (event.previousRev !== prevSnapshot._rev) {
+          // console.warn(
+          //   'Revision mismatch: Cannot apply %s on %s (event: %O, prevSnapshot: %O)',
+          //   event.previousRev,
+          //   prevSnapshot._rev,
+          //   event,
+          //   prevSnapshot
+          // )
+          return prevSnapshot
+        }
+        // console.log('apply mutations', prevSnapshot, event)
+        return applyMutations(prevSnapshot, event)
+      }
+      // eslint-disable-next-line no-console
+      console.warn(new Error(`Invalid event: ${event.type}`))
+      return prevSnapshot
+    }, null)
 }
 
 // keep for debugging purposes for now
