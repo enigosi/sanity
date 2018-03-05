@@ -76,28 +76,49 @@ function listenFields(id: Id, fields: FieldName[]) {
       }
       return Observable.of(event)
     })
-    .mergeScan((prevSnapshot, event) => {
-      if (event.type === 'snapshot') {
-        return Observable.of(event.snapshot)
-      }
-      if (event.type === 'mutation') {
-        if (!prevSnapshot || event.previousRev === prevSnapshot._rev) {
-          return Observable.of(applyMutations(prevSnapshot, event))
+    .mergeScan(
+      (prevSnapshot, event) => {
+        if (event.type === 'snapshot') {
+          return Observable.of(event.snapshot)
         }
-        // console.warn(
-        //   'Revision mismatch: Cannot apply %s on %s (event: %O, prevSnapshot: %O)',
-        //   event.previousRev,
-        //   prevSnapshot._rev,
-        //   event,
-        //   prevSnapshot
-        // )
-        // Fallback to re-fetch current snapshot
-        return fetchDocumentPathsSlow(id, fields)
-      }
-      // eslint-disable-next-line no-console
-      console.warn(new Error(`Invalid event: ${event.type}`))
-      return prevSnapshot
-    }, null)
+        if (event.type === 'mutation') {
+          if (!prevSnapshot || event.previousRev === prevSnapshot._rev) {
+            return new Observable(observer => {
+              let res
+              try {
+                res = applyMutations(prevSnapshot, event)
+              } catch (err) {
+                observer.error(err)
+                return
+              }
+              observer.next(res)
+              observer.complete()
+            }).catch(err => {
+              // This happens because change events come in the wrong order
+              // todo: keep a list of the past <n> mutations, apply them in order
+              err.message = `Mutations could not be applied, entering recovery mode: ${err.message}`
+              // eslint-disable-next-line no-console
+              console.warn(err)
+              return fetchDocumentPathsSlow(id, fields)
+            })
+          }
+          // console.warn(
+          //   'Revision mismatch: Cannot apply %s on %s (event: %O, prevSnapshot: %O)',
+          //   event.previousRev,
+          //   prevSnapshot._rev,
+          //   event,
+          //   prevSnapshot
+          // )
+          // Fallback to re-fetch current snapshot
+          return fetchDocumentPathsSlow(id, fields)
+        }
+        // eslint-disable-next-line no-console
+        console.warn(new Error(`Invalid event: ${event.type}`))
+        return prevSnapshot
+      },
+      null,
+      1
+    )
 }
 
 // keep for debugging purposes for now
