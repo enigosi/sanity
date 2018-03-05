@@ -76,23 +76,23 @@ function listenFields(id: Id, fields: FieldName[]) {
       }
       return Observable.of(event)
     })
-    .scan((prevSnapshot, event) => {
+    .mergeScan((prevSnapshot, event) => {
       if (event.type === 'snapshot') {
-        return event.snapshot
+        return Observable.of(event.snapshot)
       }
       if (event.type === 'mutation') {
-        if (event.previousRev !== prevSnapshot._rev) {
-          // console.warn(
-          //   'Revision mismatch: Cannot apply %s on %s (event: %O, prevSnapshot: %O)',
-          //   event.previousRev,
-          //   prevSnapshot._rev,
-          //   event,
-          //   prevSnapshot
-          // )
-          return prevSnapshot
+        if (!prevSnapshot || event.previousRev === prevSnapshot._rev) {
+          return Observable.of(applyMutations(prevSnapshot, event))
         }
-        // console.log('apply mutations', prevSnapshot, event)
-        return applyMutations(prevSnapshot, event)
+        // console.warn(
+        //   'Revision mismatch: Cannot apply %s on %s (event: %O, prevSnapshot: %O)',
+        //   event.previousRev,
+        //   prevSnapshot._rev,
+        //   event,
+        //   prevSnapshot
+        // )
+        // Fallback to re-fetch current snapshot
+        return fetchDocumentPathsSlow(id, fields)
       }
       // eslint-disable-next-line no-console
       console.warn(new Error(`Invalid event: ${event.type}`))
